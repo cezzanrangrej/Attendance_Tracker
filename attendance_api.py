@@ -5,15 +5,46 @@ import traceback
 import time
 import pymysql
 from flask_cors import CORS
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__, 
     static_folder='static',
-    template_folder='templates'
+    template_folder='templates',
+    static_url_path='/static'
 )
 
-# Enable CORS
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Enable CORS with additional options
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept"]
+    }
+})
+
+# Add CORS headers to all responses
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
+# Handle OPTIONS requests explicitly
+@app.route('/', methods=['OPTIONS'])
+@app.route('/<path:path>', methods=['OPTIONS'])
+def options_handler(path=None):
+    return jsonify({}), 200
+
+# Add a simple diagnostic endpoint
+@app.route('/api/ping', methods=['GET'])
+def ping():
+    return jsonify({"status": "ok", "message": "Server is running", "timestamp": datetime.now().isoformat()})
 
 # Initialize DAO with retry mechanism
 def init_system(max_retries=5):
@@ -21,15 +52,22 @@ def init_system(max_retries=5):
         try:
             # First, test if we can connect to MySQL
             test_conn = pymysql.connect(
-                host='localhost',
-                user='root',
-                password='Ar.Saini@2004',
+                host=os.getenv('DB_HOST'),
+                user=os.getenv('DB_USER'),
+                password=os.getenv('DB_PASSWORD'),
                 connect_timeout=5
             )
             test_conn.close()
+            print("Successfully connected to MySQL")
             
             # Now initialize our system
-            system = AttendanceSystem(user='root', password='Ar.Saini@2004')
+            system = AttendanceSystem(
+                host=os.getenv('DB_HOST'),
+                port=int(os.getenv('DB_PORT')),
+                user=os.getenv('DB_USER'),
+                password=os.getenv('DB_PASSWORD'),
+                database=os.getenv('DB_NAME')
+            )
             # Test connection
             conn = system.connect_db()
             if conn:
@@ -53,17 +91,15 @@ def init_system(max_retries=5):
 # Global system instance
 system = None
 
-@app.before_first_request
-def initialize_system():
-    global system
-    if system is None:
-        try:
-            system = init_system()
-            if system is None:
-                raise Exception("Failed to initialize database system")
-        except Exception as e:
-            print(f"System initialization failed: {str(e)}")
-            raise
+# Initialize system before first request
+with app.app_context():
+    try:
+        system = init_system()
+        if system is None:
+            raise Exception("Failed to initialize database system")
+    except Exception as e:
+        print(f"System initialization failed: {str(e)}")
+        raise
 
 @app.route('/')
 def home():
@@ -84,28 +120,49 @@ def handle_404(error):
     return jsonify({'error': 'Not found', 'details': str(error)}), 404
 
 # ----- Student Endpoints -----
-@app.route('/students', methods=['GET'])
+@app.route('/api/student-list', methods=['GET'])
 def list_students():
     try:
+        print("Received GET request for /api/student-list")
         if system is None:
             raise Exception("Database system not initialized")
             
         rows = system.list_students()
-        students = [
-            {'id': r['id'], 'roll_no': r['roll_no'], 'name': r['name'], 'class': r['class']} for r in rows
-        ]
+        students = []
+        
+        for r in rows:
+            # Ensure 'class' is properly included and not undefined
+            student = {
+                'id': r['id'],
+                'roll_no': r['roll_no'],
+                'name': r['name']
+            }
+            
+            # Add class, ensuring it's not undefined
+            if 'class' in r and r['class']:
+                student['class'] = r['class']
+            else:
+                student['class'] = 'N/A'  # Fallback if class is missing or empty
+                
+            students.append(student)
+            
+        print(f"Returning students: {students}")
         return jsonify(students)
     except Exception as e:
         print(f"Error in list_students: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
-@app.route('/students', methods=['POST'])
+@app.route('/api/student-add', methods=['POST'])
 def create_student():
     try:
+        print("Received POST request for /api/student-add")
         if system is None:
             raise Exception("Database system not initialized")
             
         data = request.get_json()
+        print(f"Received data: {data}")
+        
         if not data:
             return jsonify({'error': 'No data provided'}), 400
             
@@ -116,24 +173,37 @@ def create_student():
 
         try:
             student_id = int(data['id'])
+            
+            # 'class' is a reserved keyword in Python, so ensure we're handling it correctly
+            student_class = data.get('class')
+            if not student_class or student_class.strip() == '':
+                return jsonify({'error': 'Class cannot be empty'}), 400
+                
             student = Student(
                 roll_no=int(data['roll_no']),
                 name=data['name'],
-                student_class=data['class']
+                student_class=student_class
             )
-        except ValueError:
+            print(f"Created student object: {student}")
+        except ValueError as e:
+            print(f"ValueError: {str(e)}")
             return jsonify({'error': 'ID and roll number must be valid integers'}), 400
         
         try:
             sid = system.add_student(student, student_id)
             row = system.get_student(sid)
-            return jsonify({
+            
+            # Ensure class is properly defined in the response
+            response_data = {
                 'id': row['id'],
                 'roll_no': row['roll_no'],
                 'name': row['name'],
-                'class': row['class']
-            }), 201
+                'class': row['class'] if 'class' in row else student_class  # Fallback if needed
+            }
+            print(f"Successfully added student: {response_data}")
+            return jsonify(response_data), 201
         except Exception as e:
+            print(f"Error adding student to database: {str(e)}")
             return jsonify({'error': str(e)}), 400
         
     except Exception as e:
@@ -192,29 +262,32 @@ def delete_student(sid):
         return jsonify({'error': str(e)}), 500
 
 # ----- Attendance Endpoints -----
-@app.route('/attendance', methods=['GET'])
+@app.route('/api/attendance', methods=['GET'])
 def list_all_attendance():
     try:
+        print("Received GET request for /api/attendance")
         if system is None:
             raise Exception("Database system not initialized")
             
         rows = system.list_all_attendance()
-        records = [
-            {'id': r['id'], 'roll_no': r['roll_no'], 'name': r['name'], 'date': str(r['date']), 'status': r['status']}
-            for r in rows
-        ]
-        return jsonify(records)
+        # No need to transform rows here as we've done that in the DB layer
+        print(f"Returning attendance records: {rows}")
+        return jsonify(rows)
     except Exception as e:
         print(f"Error in list_all_attendance: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
-@app.route('/attendance', methods=['POST'])
+@app.route('/api/attendance', methods=['POST'])
 def mark_attendance():
     try:
+        print("Received POST request for /api/attendance")
         if system is None:
             raise Exception("Database system not initialized")
             
         data = request.get_json()
+        print(f"Received attendance data: {data}")
+        
         if not data:
             return jsonify({'error': 'No data provided'}), 400
             
@@ -242,12 +315,22 @@ def mark_attendance():
                 return jsonify({'error': 'Failed to mark attendance'}), 500
                 
             row = system.get_attendance(aid)
-            return jsonify({
+            
+            # Get student details to include class
+            student_details = system.get_student(student_id)
+            
+            response_data = {
                 'id': row['id'],
                 'student_id': row['student_id'],
+                'roll_no': student_details['roll_no'],
+                'name': student_details['name'],
+                'class': student_details['class'] if student_details and 'class' in student_details else 'N/A',
                 'date': str(row['date']),
                 'status': row['status']
-            }), 201
+            }
+            
+            print(f"Successfully marked attendance: {response_data}")
+            return jsonify(response_data), 201
             
         except ValueError as e:
             return jsonify({'error': f'Invalid data format: {str(e)}'}), 400
@@ -302,25 +385,19 @@ def update_attendance(aid):
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
-@app.route('/attendance/<int:aid>', methods=['DELETE'])
+@app.route('/api/attendance/<int:aid>', methods=['DELETE'])
 def delete_attendance(aid):
     try:
+        print(f"Received DELETE request for /api/attendance/{aid}")
         existing = system.get_attendance(aid)
         if not existing:
             return jsonify({'message': 'Record not found'}), 404
         system.delete_attendance(aid)
         return jsonify({'message': f'Attendance id={aid} deleted'})
     except Exception as e:
+        print(f"Error deleting attendance: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Initialize system before running
-    try:
-        system = init_system()
-        if system is None:
-            print("Failed to initialize system. Please check your database connection.")
-            exit(1)
-        app.run(debug=True, host='0.0.0.0', port=5003)
-    except Exception as e:
-        print(f"Failed to start application: {str(e)}")
-        exit(1)
+    app.run(debug=True, host='0.0.0.0', port=5173)

@@ -1,0 +1,21 @@
+{
+  "name": "attendance_tracker",
+  "version": "1.0.0",
+  "description": "📚 Student Attendance Management System",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "vite": "^6.3.2"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "vue": "^3.5.13"
+  }
+}

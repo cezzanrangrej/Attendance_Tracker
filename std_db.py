@@ -1,5 +1,10 @@
 import pymysql
 from datetime import date
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 class Student:
     def __init__(self, roll_no=0, name="", student_class=""):
@@ -11,13 +16,13 @@ class Student:
         return f"Roll No: {self.roll_no}, Name: {self.name}, Class: {self.student_class}"  
 
 class AttendanceSystem:
-    def __init__(self, host='localhost', port=3306, user='root', password='Ar.Saini@2004', database='attendance_db', charset='utf8mb4'):
+    def __init__(self, host=None, port=None, user=None, password=None, database=None, charset='utf8mb4'):
         self.db_config = {
-            'host': host,
-            'port': port,
-            'user': user,
-            'password': password,
-            'database': database,
+            'host': host or os.getenv('DB_HOST'),
+            'port': port or int(os.getenv('DB_PORT')),
+            'user': user or os.getenv('DB_USER'),
+            'password': password or os.getenv('DB_PASSWORD'),
+            'database': database or os.getenv('DB_NAME'),
             'charset': charset,
             'cursorclass': pymysql.cursors.DictCursor
         }
@@ -260,10 +265,30 @@ class AttendanceSystem:
     def list_all_attendance(self):
         conn = self.connect_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT a.id, s.roll_no, s.name, a.date, a.status FROM attendance a JOIN students s ON a.student_id=s.id")
+        # Join with students table to get student information including class
+        cursor.execute("SELECT a.id, s.roll_no, s.name, s.class, a.date, a.status FROM attendance a JOIN students s ON a.student_id=s.id")
         rows = cursor.fetchall()
+        
+        # Process rows to ensure class is properly defined
+        result = []
         for r in rows:
-            print(r)
+            record = {
+                'id': r['id'],
+                'roll_no': r['roll_no'],
+                'name': r['name'],
+                'date': r['date'],
+                'status': r['status']
+            }
+            
+            # Ensure class is never undefined
+            if 'class' in r and r['class']:
+                record['class'] = r['class']
+            else:
+                record['class'] = 'N/A'  # Fallback value
+            
+            result.append(record)
+            print(record)
+            
         cursor.close()
         self.disconnect_db(conn)
-        return rows
+        return result
