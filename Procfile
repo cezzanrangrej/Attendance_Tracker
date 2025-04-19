@@ -1,1 +1,1 @@
-web: python -m gunicorn attendance_api:app 
+web: pip install -r requirements.txt && gunicorn wsgi:app 

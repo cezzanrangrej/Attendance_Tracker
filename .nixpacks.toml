@@ -1,0 +1,11 @@
+[phases.setup]
+aptPkgs = ['python3-dev', 'python3-pip', 'build-essential']
+
+[phases.install]
+cmds = ['python -m pip install --upgrade pip', 'pip install --no-cache-dir -r requirements.txt']
+
+[phases.build]
+cmds = ['echo "Build complete"']
+
+[start]
+cmd = 'gunicorn wsgi:app' 
