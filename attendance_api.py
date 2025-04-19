@@ -1,15 +1,74 @@
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, send_from_directory
 from std_db import Student, AttendanceSystem
 from datetime import datetime
 import traceback
 import time
 import pymysql
+import psycopg2
 from flask_cors import CORS
 import os
 from dotenv import load_dotenv
+import re
+from urllib.parse import urlparse
+from werkzeug.security import generate_password_hash, check_password_hash
+import logging
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Get database URL from environment (for Railway)
+def get_db_config():
+    # First, check if we have a Railway DATABASE_URL
+    database_url = os.getenv('DATABASE_URL')
+    
+    if database_url:
+        logger.info(f"Using DATABASE_URL environment variable")
+        
+        # Check if PostgreSQL URL (Railway format)
+        if database_url.startswith('postgresql://'):
+            logger.info("Detected PostgreSQL connection string")
+            # Parse the PostgreSQL URL
+            parsed = urlparse(database_url)
+            
+            return {
+                'host': parsed.hostname,
+                'port': parsed.port or 5432,
+                'user': parsed.username,
+                'password': parsed.password,
+                'database': parsed.path[1:] if parsed.path else None,
+                'db_type': 'postgresql'
+            }
+        # MySQL URL format
+        elif database_url.startswith('mysql://'):
+            logger.info("Detected MySQL connection string")
+            # Parse the MySQL URL
+            parsed = urlparse(database_url)
+            
+            return {
+                'host': parsed.hostname,
+                'port': parsed.port or 3306,
+                'user': parsed.username,
+                'password': parsed.password,
+                'database': parsed.path[1:] if parsed.path else None,
+                'db_type': 'mysql'
+            }
+        else:
+            logger.warning(f"Unknown database URL format: {database_url[:10]}...")
+    
+    # Fallback to individual environment variables (default to MySQL)
+    logger.info("Using individual DB environment variables")
+    return {
+        'host': os.getenv('DB_HOST', 'localhost'),
+        'port': int(os.getenv('DB_PORT', 3306)),
+        'user': os.getenv('DB_USER', 'root'),
+        'password': os.getenv('DB_PASSWORD', ''),
+        'database': os.getenv('DB_NAME', 'attendance_db'),
+        'db_type': 'mysql'
+    }
 
 # Initialize Flask app
 app = Flask(__name__, 
@@ -47,59 +106,59 @@ def ping():
     return jsonify({"status": "ok", "message": "Server is running", "timestamp": datetime.now().isoformat()})
 
 # Initialize DAO with retry mechanism
-def init_system(max_retries=5):
+def init_system():
+    config = get_db_config()
+    logger.info(f"Initializing database with config: host={config['host']}, db_type={config['db_type']}")
+    
+    # Extract the db_type
+    db_type = config.pop('db_type', 'mysql')
+    
+    # Create the attendance system with the appropriate database type
+    system = AttendanceSystem(**config, db_type=db_type)
+    
+    # Retry connection with backoff
+    max_retries = 5
     for attempt in range(max_retries):
         try:
-            # First, test if we can connect to MySQL
-            test_conn = pymysql.connect(
-                host=os.getenv('DB_HOST'),
-                user=os.getenv('DB_USER'),
-                password=os.getenv('DB_PASSWORD'),
-                connect_timeout=5
-            )
-            test_conn.close()
-            print("Successfully connected to MySQL")
-            
-            # Now initialize our system
-            system = AttendanceSystem(
-                host=os.getenv('DB_HOST'),
-                port=int(os.getenv('DB_PORT')),
-                user=os.getenv('DB_USER'),
-                password=os.getenv('DB_PASSWORD'),
-                database=os.getenv('DB_NAME')
-            )
-            # Test connection
+            # Try to connect to the database
             conn = system.connect_db()
             if conn:
                 conn.close()
-                # Ensure database and tables exist
-                system.create_database()
+                logger.info("Successfully connected to database")
+                
+                # Set up database tables
+                system.create_database()  # This will be skipped for PostgreSQL
                 system.create_tables()
                 return system
-        except pymysql.Error as e:
-            if attempt < max_retries - 1:
-                print(f"Database connection failed (attempt {attempt + 1}/{max_retries}): {str(e)}")
-                time.sleep(2)  # Wait 2 seconds before retrying
             else:
-                print(f"Failed to connect to database after {max_retries} attempts: {str(e)}")
-                raise
+                logger.warning(f"Connection failed on attempt {attempt+1}/{max_retries}")
         except Exception as e:
-            print(f"Unexpected error during initialization: {str(e)}")
-            raise
-    return None
+            logger.error(f"Error connecting to database (attempt {attempt+1}/{max_retries}): {e}")
+        
+        # Don't sleep on the last attempt
+        if attempt < max_retries - 1:
+            sleep_time = 2 ** attempt  # Exponential backoff: 1, 2, 4, 8...
+            logger.info(f"Retrying in {sleep_time} seconds...")
+            time.sleep(sleep_time)
+    
+    logger.error("Failed to connect to database after multiple attempts")
+    return system  # Return system anyway to avoid errors, but it won't work
 
 # Global system instance
 system = None
 
 # Initialize system before first request
-with app.app_context():
-    try:
-        system = init_system()
-        if system is None:
-            raise Exception("Failed to initialize database system")
-    except Exception as e:
-        print(f"System initialization failed: {str(e)}")
-        raise
+@app.before_first_request
+def initialize_system():
+    global system
+    if system is None:
+        try:
+            system = init_system()
+            if system is None:
+                raise Exception("Failed to initialize database system")
+        except Exception as e:
+            print(f"System initialization failed: {str(e)}")
+            # In production, we continue anyway and let the endpoints handle the error
 
 @app.route('/')
 def home():
@@ -109,6 +168,10 @@ def home():
         return render_template('index.html')
     except Exception as e:
         return render_template('error.html', error=str(e))
+
+@app.route('/static/<path:path>')
+def send_static(path):
+    return send_from_directory('static', path)
 
 # ----- Error Handlers -----
 @app.errorhandler(500)
@@ -400,4 +463,6 @@ def delete_attendance(aid):
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5173)
+    # Use the port provided by Railway, or default to 5173
+    port = int(os.environ.get("PORT", 5173))
+    app.run(debug=False, host='0.0.0.0', port=port)

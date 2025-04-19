@@ -1,4 +1,6 @@
 import pymysql
+import psycopg2
+from psycopg2.extras import DictCursor
 from datetime import date
 import os
 from dotenv import load_dotenv
@@ -16,23 +18,43 @@ class Student:
         return f"Roll No: {self.roll_no}, Name: {self.name}, Class: {self.student_class}"  
 
 class AttendanceSystem:
-    def __init__(self, host=None, port=None, user=None, password=None, database=None, charset='utf8mb4'):
-        self.db_config = {
-            'host': host or os.getenv('DB_HOST'),
-            'port': port or int(os.getenv('DB_PORT')),
-            'user': user or os.getenv('DB_USER'),
-            'password': password or os.getenv('DB_PASSWORD'),
-            'database': database or os.getenv('DB_NAME'),
-            'charset': charset,
-            'cursorclass': pymysql.cursors.DictCursor
-        }
+    def __init__(self, host=None, port=None, user=None, password=None, database=None, db_type='mysql', charset='utf8mb4'):
+        self.db_type = db_type
+        
+        if self.db_type == 'postgresql':
+            # PostgreSQL config (for Railway)
+            self.db_config = {
+                'host': host or os.getenv('DB_HOST'),
+                'port': port or int(os.getenv('DB_PORT', 5432)),
+                'user': user or os.getenv('DB_USER'),
+                'password': password or os.getenv('DB_PASSWORD'),
+                'dbname': database or os.getenv('DB_NAME')
+            }
+        else:
+            # MySQL config (default)
+            self.db_config = {
+                'host': host or os.getenv('DB_HOST'),
+                'port': port or int(os.getenv('DB_PORT', 3306)),
+                'user': user or os.getenv('DB_USER'),
+                'password': password or os.getenv('DB_PASSWORD'),
+                'database': database or os.getenv('DB_NAME'),
+                'charset': charset,
+                'cursorclass': pymysql.cursors.DictCursor
+            }
 
     def connect_db(self):
         try:
-            conn = pymysql.connect(**self.db_config)
-            print("DB connected")
-            return conn
-        except pymysql.MySQLError as err:
+            if self.db_type == 'postgresql':
+                # PostgreSQL connection
+                conn = psycopg2.connect(**self.db_config)
+                print("PostgreSQL DB connected")
+                return conn
+            else:
+                # MySQL connection
+                conn = pymysql.connect(**self.db_config)
+                print("MySQL DB connected")
+                return conn
+        except Exception as err:
             print(f"Error connecting to DB: {err}")
             return None
 
@@ -42,8 +64,13 @@ class AttendanceSystem:
             print("DB disconnected")
 
     def create_database(self):
+        if self.db_type == 'postgresql':
+            # In PostgreSQL, we don't need to create the database
+            # It's already created by Railway
+            return
+        
         try:
-            # Connect without database to create it
+            # MySQL: Connect without database to create it
             cfg = self.db_config.copy()
             cfg.pop('database')
             conn = pymysql.connect(**cfg)
@@ -52,7 +79,7 @@ class AttendanceSystem:
             print("Database 'attendance_db' ensured.")
             cursor.close()
             conn.close()
-        except pymysql.MySQLError as err:
+        except Exception as err:
             print(f"Error creating database: {err}")
 
     def create_tables(self):
@@ -61,32 +88,74 @@ class AttendanceSystem:
             return
         try:
             cursor = conn.cursor()
-            # Student table
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS students (
-                    id INT PRIMARY KEY,
-                    roll_no INT UNIQUE NOT NULL,
-                    name VARCHAR(100) NOT NULL,
-                    class VARCHAR(50) NOT NULL
-                );
-                """
-            )
-            # Attendance table
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS attendance (
-                    id INT PRIMARY KEY AUTO_INCREMENT,
-                    student_id INT NOT NULL,
-                    date DATE NOT NULL,
-                    status ENUM('Present','Absent') NOT NULL,
-                    FOREIGN KEY (student_id) REFERENCES students(id)
-                );
-                """
-            )
+            
+            if self.db_type == 'postgresql':
+                # PostgreSQL tables with proper data types
+                # Create an enum type for attendance status
+                cursor.execute(
+                    """
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'attendance_status') THEN
+                            CREATE TYPE attendance_status AS ENUM ('Present', 'Absent');
+                        END IF;
+                    END$$;
+                    """
+                )
+                
+                # Students table
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS students (
+                        id INTEGER PRIMARY KEY,
+                        roll_no INTEGER UNIQUE NOT NULL,
+                        name VARCHAR(100) NOT NULL,
+                        class VARCHAR(50) NOT NULL
+                    );
+                    """
+                )
+                
+                # Attendance table
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS attendance (
+                        id SERIAL PRIMARY KEY,
+                        student_id INTEGER NOT NULL,
+                        date DATE NOT NULL,
+                        status attendance_status NOT NULL,
+                        FOREIGN KEY (student_id) REFERENCES students(id)
+                    );
+                    """
+                )
+            else:
+                # MySQL tables
+                # Student table
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS students (
+                        id INT PRIMARY KEY,
+                        roll_no INT UNIQUE NOT NULL,
+                        name VARCHAR(100) NOT NULL,
+                        class VARCHAR(50) NOT NULL
+                    );
+                    """
+                )
+                # Attendance table
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS attendance (
+                        id INT PRIMARY KEY AUTO_INCREMENT,
+                        student_id INT NOT NULL,
+                        date DATE NOT NULL,
+                        status ENUM('Present','Absent') NOT NULL,
+                        FOREIGN KEY (student_id) REFERENCES students(id)
+                    );
+                    """
+                )
+            
             conn.commit()
             print("Tables 'students' and 'attendance' ensured.")
-        except pymysql.MySQLError as err:
+        except Exception as err:
             print(f"Error creating tables: {err}")
             conn.rollback()
         finally:
@@ -106,25 +175,36 @@ class AttendanceSystem:
                 raise Exception("Student ID is required")
                 
             # Check if student ID already exists
-            cursor.execute("SELECT id FROM students WHERE id = %s", (student_id,))
-            if cursor.fetchone():
+            if self.db_type == 'postgresql':
+                cursor.execute("SELECT id FROM students WHERE id = %s", (student_id,))
+                existing_id = cursor.fetchone()
+            else:
+                cursor.execute("SELECT id FROM students WHERE id = %s", (student_id,))
+                existing_id = cursor.fetchone()
+                
+            if existing_id:
                 raise Exception(f"Student with ID {student_id} already exists")
             
             # Check if roll number already exists
-            cursor.execute("SELECT id FROM students WHERE roll_no = %s", (student.roll_no,))
-            if cursor.fetchone():
+            if self.db_type == 'postgresql':
+                cursor.execute("SELECT id FROM students WHERE roll_no = %s", (student.roll_no,))
+                existing_roll = cursor.fetchone()
+            else:
+                cursor.execute("SELECT id FROM students WHERE roll_no = %s", (student.roll_no,))
+                existing_roll = cursor.fetchone()
+                
+            if existing_roll:
                 raise Exception(f"Student with roll number {student.roll_no} already exists")
             
+            # Insert student
             query = "INSERT INTO students (id, roll_no, name, class) VALUES (%s, %s, %s, %s)"
             cursor.execute(query, (student_id, student.roll_no, student.name, student.student_class))
             conn.commit()
             print(f"Student added with id={student_id}")
             return student_id
-        except pymysql.Error as err:
+        except Exception as err:
             print(f"Error adding student: {err}")
             conn.rollback()
-            if err.args[0] == 1062:  # Duplicate entry error
-                raise Exception(f"Student with roll number {student.roll_no} already exists")
             raise Exception(f"Database error: {str(err)}")
         finally:
             if cursor:
@@ -161,7 +241,7 @@ class AttendanceSystem:
             cursor.execute("SELECT id, roll_no, name, class FROM students WHERE id=%s", (sid,))
             row = cursor.fetchone()
             return row
-        except pymysql.MySQLError as err:
+        except Exception as err:
             print(f"Error getting student: {err}")
             return None
         finally:
@@ -177,7 +257,7 @@ class AttendanceSystem:
             cursor.execute("SELECT id, roll_no, name, class FROM students")
             rows = cursor.fetchall()
             return rows
-        except pymysql.MySQLError as err:
+        except Exception as err:
             print(f"Error listing students: {err}")
             return []
         finally:
@@ -210,11 +290,18 @@ class AttendanceSystem:
             query = "INSERT INTO attendance (student_id, date, status) VALUES (%s, %s, %s)"
             cursor.execute(query, (student_id, at_date, status))
             conn.commit()
-            aid = cursor.lastrowid
+            
+            # Get the last inserted ID
+            if self.db_type == 'postgresql':
+                cursor.execute("SELECT lastval()")
+                aid = cursor.fetchone()[0]
+            else:
+                aid = cursor.lastrowid
+                
             print(f"Attendance marked id={aid} for student_id={student_id}")
             return aid
             
-        except pymysql.Error as err:
+        except Exception as err:
             print(f"Error marking attendance: {err}")
             conn.rollback()
             raise Exception(f"Database error: {str(err)}")
@@ -273,19 +360,23 @@ class AttendanceSystem:
         result = []
         for r in rows:
             record = {
-                'id': r['id'],
-                'roll_no': r['roll_no'],
-                'name': r['name'],
-                'date': r['date'],
-                'status': r['status']
+                'id': r['id'] if self.db_type == 'mysql' else r[0],
+                'roll_no': r['roll_no'] if self.db_type == 'mysql' else r[1],
+                'name': r['name'] if self.db_type == 'mysql' else r[2],
+                'date': r['date'] if self.db_type == 'mysql' else r[4],
+                'status': r['status'] if self.db_type == 'mysql' else r[5]
             }
             
             # Ensure class is never undefined
-            if 'class' in r and r['class']:
-                record['class'] = r['class']
+            if self.db_type == 'mysql':
+                if 'class' in r and r['class']:
+                    record['class'] = r['class']
+                else:
+                    record['class'] = 'N/A'  # Fallback value
             else:
-                record['class'] = 'N/A'  # Fallback value
-            
+                # PostgreSQL returns tuples, not dicts
+                record['class'] = r[3] if r[3] else 'N/A'
+                
             result.append(record)
             print(record)
             
