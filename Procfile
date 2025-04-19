@@ -1,1 +1,1 @@
-web: gunicorn attendance_api:app 
+web: python -m gunicorn attendance_api:app 

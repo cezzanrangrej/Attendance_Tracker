@@ -463,6 +463,6 @@ def delete_attendance(aid):
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Use the port provided by Railway, or default to 5173
-    port = int(os.environ.get("PORT", 5173))
+    # Use the port provided by Railway, or default to 5000
+    port = int(os.environ.get("PORT", 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
