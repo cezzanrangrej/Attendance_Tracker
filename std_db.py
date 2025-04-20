@@ -107,7 +107,7 @@ class AttendanceSystem:
                 cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS students (
-                        id INTEGER PRIMARY KEY,
+                        id SERIAL PRIMARY KEY,
                         roll_no INTEGER UNIQUE NOT NULL,
                         name VARCHAR(100) NOT NULL,
                         class VARCHAR(50) NOT NULL
@@ -133,7 +133,7 @@ class AttendanceSystem:
                 cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS students (
-                        id INT PRIMARY KEY,
+                        id INT PRIMARY KEY AUTO_INCREMENT,
                         roll_no INT UNIQUE NOT NULL,
                         name VARCHAR(100) NOT NULL,
                         class VARCHAR(50) NOT NULL
@@ -170,21 +170,6 @@ class AttendanceSystem:
         try:
             cursor = conn.cursor()
             
-            # Check if student ID is provided
-            if student_id is None:
-                raise Exception("Student ID is required")
-                
-            # Check if student ID already exists
-            if self.db_type == 'postgresql':
-                cursor.execute("SELECT id FROM students WHERE id = %s", (student_id,))
-                existing_id = cursor.fetchone()
-            else:
-                cursor.execute("SELECT id FROM students WHERE id = %s", (student_id,))
-                existing_id = cursor.fetchone()
-                
-            if existing_id:
-                raise Exception(f"Student with ID {student_id} already exists")
-            
             # Check if roll number already exists
             if self.db_type == 'postgresql':
                 cursor.execute("SELECT id FROM students WHERE roll_no = %s", (student.roll_no,))
@@ -197,8 +182,15 @@ class AttendanceSystem:
                 raise Exception(f"Student with roll number {student.roll_no} already exists")
             
             # Insert student
-            query = "INSERT INTO students (id, roll_no, name, class) VALUES (%s, %s, %s, %s)"
-            cursor.execute(query, (student_id, student.roll_no, student.name, student.student_class))
+            if self.db_type == 'postgresql':
+                query = "INSERT INTO students (roll_no, name, class) VALUES (%s, %s, %s) RETURNING id"
+                cursor.execute(query, (student.roll_no, student.name, student.student_class))
+                student_id = cursor.fetchone()[0]
+            else:
+                query = "INSERT INTO students (roll_no, name, class) VALUES (%s, %s, %s)"
+                cursor.execute(query, (student.roll_no, student.name, student.student_class))
+                student_id = cursor.lastrowid
+                
             conn.commit()
             print(f"Student added with id={student_id}")
             return student_id

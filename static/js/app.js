@@ -134,18 +134,16 @@ async function fetchAttendance() {
 studentForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
-    const studentId = document.getElementById('studentId').value;
     const rollNo = document.getElementById('rollNo').value;
     const name = document.getElementById('studentName').value;
     const studentClass = document.getElementById('studentClass').value;
     
-    if (!studentId || !rollNo || !name || !studentClass) {
+    if (!rollNo || !name || !studentClass) {
         showAlert('Please fill in all fields', 'warning');
         return;
     }
     
     const studentData = {
-        id: parseInt(studentId),
         roll_no: parseInt(rollNo),
         name: name,
         class: studentClass
