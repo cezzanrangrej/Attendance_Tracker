@@ -1,16 +1,12 @@
 from flask import Flask, jsonify, request, render_template, send_from_directory
-from std_db import Student, AttendanceSystem
+from backend.database.std_db import Student, AttendanceSystem
 from datetime import datetime
 import traceback
 import time
 import pymysql
-import psycopg2
 from flask_cors import CORS
 import os
 from dotenv import load_dotenv
-import re
-from urllib.parse import urlparse
-from werkzeug.security import generate_password_hash, check_password_hash
 import logging
 import sys
 
@@ -24,47 +20,10 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 logger.info("Environment variables loaded")
 
-# Get database URL from environment (for Railway)
+# Get database configuration
 def get_db_config():
-    # First, check if we have a Railway DATABASE_URL
-    database_url = os.getenv('DATABASE_URL')
-    
-    if database_url:
-        logger.info(f"Using DATABASE_URL environment variable")
-        
-        # Check if PostgreSQL URL (Railway format)
-        if database_url.startswith('postgresql://'):
-            logger.info("Detected PostgreSQL connection string")
-            # Parse the PostgreSQL URL
-            parsed = urlparse(database_url)
-            
-            return {
-                'host': parsed.hostname,
-                'port': parsed.port or 5432,
-                'user': parsed.username,
-                'password': parsed.password,
-                'database': parsed.path[1:] if parsed.path else None,
-                'db_type': 'postgresql'
-            }
-        # MySQL URL format
-        elif database_url.startswith('mysql://'):
-            logger.info("Detected MySQL connection string")
-            # Parse the MySQL URL
-            parsed = urlparse(database_url)
-            
-            return {
-                'host': parsed.hostname,
-                'port': parsed.port or 3306,
-                'user': parsed.username,
-                'password': parsed.password,
-                'database': parsed.path[1:] if parsed.path else None,
-                'db_type': 'mysql'
-            }
-        else:
-            logger.warning(f"Unknown database URL format: {database_url[:10]}...")
-    
-    # Fallback to individual environment variables (default to MySQL)
-    logger.info("Using individual DB environment variables")
+    # Use individual environment variables (MySQL)
+    logger.info("Using database environment variables")
     return {
         'host': os.getenv('DB_HOST', 'localhost'),
         'port': int(os.getenv('DB_PORT', 3306)),
@@ -76,8 +35,8 @@ def get_db_config():
 
 # Initialize Flask app
 app = Flask(__name__, 
-    static_folder='static',
-    template_folder='templates',
+    static_folder='../../frontend/static',
+    template_folder='../../frontend/templates',
     static_url_path='/static'
 )
 
@@ -133,7 +92,7 @@ def init_system():
                     logger.info("Successfully connected to database")
                     
                     # Set up database tables
-                    system.create_database()  # This will be skipped for PostgreSQL
+                    system.create_database()
                     system.create_tables()
                     return system
                 else:
@@ -157,7 +116,7 @@ def init_system():
 # Global system instance
 system = None
 
-# Initialize system before first request - compatible with Flask 2.x
+# Initialize system before first request
 try:
     logger.info("Trying to initialize system at startup")
     system = init_system()
@@ -194,7 +153,7 @@ def home():
 
 @app.route('/static/<path:path>')
 def send_static(path):
-    return send_from_directory('static', path)
+    return send_from_directory('../../frontend/static', path)
 
 # ----- Error Handlers -----
 @app.errorhandler(500)
@@ -221,20 +180,16 @@ def list_students():
         for r in rows:
             # Ensure 'class' is properly included and not undefined
             student = {
-                'id': r['id'] if isinstance(r, dict) else r[0],
-                'roll_no': r['roll_no'] if isinstance(r, dict) else r[1],
-                'name': r['name'] if isinstance(r, dict) else r[2]
+                'id': r['id'],
+                'roll_no': r['roll_no'],
+                'name': r['name']
             }
             
             # Add class, ensuring it's not undefined
-            if isinstance(r, dict):
-                if 'class' in r and r['class']:
-                    student['class'] = r['class']
-                else:
-                    student['class'] = 'N/A'  # Fallback if class is missing or empty
+            if 'class' in r and r['class']:
+                student['class'] = r['class']
             else:
-                # PostgreSQL may return tuples
-                student['class'] = r[3] if len(r) > 3 and r[3] else 'N/A'
+                student['class'] = 'N/A'  # Fallback if class is missing or empty
                 
             students.append(student)
             
@@ -248,12 +203,13 @@ def list_students():
 @app.route('/api/student-add', methods=['POST'])
 def create_student():
     try:
-        print("Received POST request for /api/student-add")
+        logger.info("Received POST request for /api/student-add")
         if system is None:
-            raise Exception("Database system not initialized")
+            logger.error("Database system not initialized")
+            return jsonify({'error': 'Database system not initialized'}), 500
             
         data = request.get_json()
-        print(f"Received data: {data}")
+        logger.info(f"Received data: {data}")
         
         if not data:
             return jsonify({'error': 'No data provided'}), 400
@@ -276,9 +232,9 @@ def create_student():
                 name=data['name'],
                 student_class=student_class
             )
-            print(f"Created student object: {student}")
+            logger.info(f"Created student object: {student}")
         except ValueError as e:
-            print(f"ValueError: {str(e)}")
+            logger.error(f"ValueError: {str(e)}")
             return jsonify({'error': 'ID and roll number must be valid integers'}), 400
         
         try:
@@ -292,15 +248,15 @@ def create_student():
                 'name': row['name'],
                 'class': row['class'] if 'class' in row else student_class  # Fallback if needed
             }
-            print(f"Successfully added student: {response_data}")
+            logger.info(f"Successfully added student: {response_data}")
             return jsonify(response_data), 201
         except Exception as e:
-            print(f"Error adding student to database: {str(e)}")
+            logger.error(f"Error adding student to database: {str(e)}")
             return jsonify({'error': str(e)}), 400
         
     except Exception as e:
-        print(f"Error in create_student: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Error in create_student: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/students/<int:sid>', methods=['GET'])
@@ -316,7 +272,7 @@ def read_student(sid):
             'class': row['class']
         })
     except Exception as e:
-        print(f"Error in read_student: {str(e)}")
+        logger.error(f"Error in read_student: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/students/<int:sid>', methods=['PUT'])
@@ -357,28 +313,30 @@ def delete_student(sid):
 @app.route('/api/attendance', methods=['GET'])
 def list_all_attendance():
     try:
-        print("Received GET request for /api/attendance")
+        logger.info("Received GET request for /api/attendance")
         if system is None:
-            raise Exception("Database system not initialized")
+            logger.error("Database system not initialized")
+            return jsonify({'error': 'Database system not initialized'}), 500
             
         rows = system.list_all_attendance()
         # No need to transform rows here as we've done that in the DB layer
-        print(f"Returning attendance records: {rows}")
+        logger.info(f"Returning attendance records: {rows}")
         return jsonify(rows)
     except Exception as e:
-        print(f"Error in list_all_attendance: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Error in list_all_attendance: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/attendance', methods=['POST'])
 def mark_attendance():
     try:
-        print("Received POST request for /api/attendance")
+        logger.info("Received POST request for /api/attendance")
         if system is None:
-            raise Exception("Database system not initialized")
+            logger.error("Database system not initialized")
+            return jsonify({'error': 'Database system not initialized'}), 500
             
         data = request.get_json()
-        print(f"Received attendance data: {data}")
+        logger.info(f"Received attendance data: {data}")
         
         if not data:
             return jsonify({'error': 'No data provided'}), 400
@@ -421,7 +379,7 @@ def mark_attendance():
                 'status': row['status']
             }
             
-            print(f"Successfully marked attendance: {response_data}")
+            logger.info(f"Successfully marked attendance: {response_data}")
             return jsonify(response_data), 201
             
         except ValueError as e:
@@ -430,8 +388,8 @@ def mark_attendance():
             return jsonify({'error': str(e)}), 400
             
     except Exception as e:
-        print(f"Error in mark_attendance: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Error in mark_attendance: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/attendance/<int:aid>', methods=['GET'])
@@ -480,19 +438,19 @@ def update_attendance(aid):
 @app.route('/api/attendance/<int:aid>', methods=['DELETE'])
 def delete_attendance(aid):
     try:
-        print(f"Received DELETE request for /api/attendance/{aid}")
+        logger.info(f"Received DELETE request for /api/attendance/{aid}")
         existing = system.get_attendance(aid)
         if not existing:
             return jsonify({'message': 'Record not found'}), 404
         system.delete_attendance(aid)
         return jsonify({'message': f'Attendance id={aid} deleted'})
     except Exception as e:
-        print(f"Error deleting attendance: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Error deleting attendance: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Use the port provided by Railway, or default to 5000
+    # Use default port
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting server on port {port}")
-    app.run(debug=False, host='0.0.0.0', port=port)
+    app.run(debug=True, host='0.0.0.0', port=port) 

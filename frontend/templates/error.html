@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Error - Attendance System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .error-container {
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .error-title {
+            color: #d32f2f;
+            margin-bottom: 20px;
+        }
+        .error-message {
+            color: #333;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #ffebee;
+            border-radius: 3px;
+        }
+        .retry-button {
+            background-color: #2196f3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .retry-button:hover {
+            background-color: #1976d2;
+        }
+    </style>
+</head>
+<body>
+    <div class="error-container">
+        <h1 class="error-title">Database Connection Error</h1>
+        <div class="error-message">
+            {{ error }}
+        </div>
+        <p>Please try the following:</p>
+        <ol>
+            <li>Make sure MySQL server is running</li>
+            <li>Check your database credentials</li>
+            <li>Try refreshing the page</li>
+        </ol>
+        <button class="retry-button" onclick="window.location.reload()">Retry Connection</button>
+    </div>
+</body>
+</html> 
