@@ -168,7 +168,10 @@ class AttendanceSystem:
             raise Exception("Failed to connect to database")
             
         try:
-            cursor = conn.cursor()
+            if self.db_type == 'postgresql':
+                cursor = conn.cursor(cursor_factory=DictCursor)
+            else:
+                cursor = conn.cursor(pymysql.cursors.DictCursor)
             
             # Check if roll number already exists
             if self.db_type == 'postgresql':
@@ -185,7 +188,8 @@ class AttendanceSystem:
             if self.db_type == 'postgresql':
                 query = "INSERT INTO students (roll_no, name, class) VALUES (%s, %s, %s) RETURNING id"
                 cursor.execute(query, (student.roll_no, student.name, student.student_class))
-                student_id = cursor.fetchone()[0]
+                result = cursor.fetchone()
+                student_id = result[0] if isinstance(result, tuple) else result['id']
             else:
                 query = "INSERT INTO students (roll_no, name, class) VALUES (%s, %s, %s)"
                 cursor.execute(query, (student.roll_no, student.name, student.student_class))
@@ -229,9 +233,22 @@ class AttendanceSystem:
         if not conn:
             return None
         try:
-            cursor = conn.cursor()
+            if self.db_type == 'postgresql':
+                cursor = conn.cursor(cursor_factory=DictCursor)
+            else:
+                cursor = conn.cursor(pymysql.cursors.DictCursor)
+                
             cursor.execute("SELECT id, roll_no, name, class FROM students WHERE id=%s", (sid,))
             row = cursor.fetchone()
+            if row:
+                # Convert to dict if it's not already (for PostgreSQL)
+                if not isinstance(row, dict):
+                    row = {
+                        'id': row[0],
+                        'roll_no': row[1],
+                        'name': row[2],
+                        'class': row[3]
+                    }
             return row
         except Exception as err:
             print(f"Error getting student: {err}")
@@ -245,9 +262,25 @@ class AttendanceSystem:
         if not conn:
             return []
         try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, roll_no, name, class FROM students")
+            if self.db_type == 'postgresql':
+                cursor = conn.cursor(cursor_factory=DictCursor)
+            else:
+                cursor = conn.cursor(pymysql.cursors.DictCursor)
+                
+            cursor.execute("SELECT id, roll_no, name, class FROM students ORDER BY roll_no")
             rows = cursor.fetchall()
+            
+            # Convert to list of dicts if needed (for PostgreSQL)
+            if rows and not isinstance(rows[0], dict):
+                rows = [
+                    {
+                        'id': row[0],
+                        'roll_no': row[1],
+                        'name': row[2],
+                        'class': row[3]
+                    }
+                    for row in rows
+                ]
             return rows
         except Exception as err:
             print(f"Error listing students: {err}")
