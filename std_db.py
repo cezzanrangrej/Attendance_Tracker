@@ -162,7 +162,7 @@ class AttendanceSystem:
             cursor.close()
             self.disconnect_db(conn)
 
-    def add_student(self, student: Student, student_id: int = None):
+    def add_student(self, student: Student):
         conn = self.connect_db()
         if not conn:
             raise Exception("Failed to connect to database")
@@ -343,35 +343,40 @@ class AttendanceSystem:
 
     def list_all_attendance(self):
         conn = self.connect_db()
-        cursor = conn.cursor()
-        # Join with students table to get student information including class
-        cursor.execute("SELECT a.id, s.roll_no, s.name, s.class, a.date, a.status FROM attendance a JOIN students s ON a.student_id=s.id")
-        rows = cursor.fetchall()
-        
-        # Process rows to ensure class is properly defined
-        result = []
-        for r in rows:
-            record = {
-                'id': r['id'] if self.db_type == 'mysql' else r[0],
-                'roll_no': r['roll_no'] if self.db_type == 'mysql' else r[1],
-                'name': r['name'] if self.db_type == 'mysql' else r[2],
-                'date': r['date'] if self.db_type == 'mysql' else r[4],
-                'status': r['status'] if self.db_type == 'mysql' else r[5]
-            }
+        if not conn:
+            return []
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT a.id, s.roll_no, s.name, s.class, a.date, a.status FROM attendance a JOIN students s ON a.student_id=s.id")
+            rows = cursor.fetchall()
             
-            # Ensure class is never undefined
-            if self.db_type == 'mysql':
-                if 'class' in r and r['class']:
-                    record['class'] = r['class']
-                else:
-                    record['class'] = 'N/A'  # Fallback value
-            else:
-                # PostgreSQL returns tuples, not dicts
-                record['class'] = r[3] if r[3] else 'N/A'
+            # Process rows to ensure class is properly defined
+            result = []
+            for r in rows:
+                record = {
+                    'id': r['id'] if self.db_type == 'mysql' else r[0],
+                    'roll_no': r['roll_no'] if self.db_type == 'mysql' else r[1],
+                    'name': r['name'] if self.db_type == 'mysql' else r[2],
+                    'date': r['date'] if self.db_type == 'mysql' else r[4],
+                    'status': r['status'] if self.db_type == 'mysql' else r[5]
+                }
                 
-            result.append(record)
-            print(record)
-            
-        cursor.close()
-        self.disconnect_db(conn)
-        return result
+                # Ensure class is never undefined
+                if self.db_type == 'mysql':
+                    if 'class' in r and r['class']:
+                        record['class'] = r['class']
+                    else:
+                        record['class'] = 'N/A'  # Fallback value
+                else:
+                    # PostgreSQL returns tuples, not dicts
+                    record['class'] = r[3] if r[3] else 'N/A'
+                    
+                result.append(record)
+                
+            return result
+        except Exception as err:
+            print(f"Error listing attendance: {err}")
+            return []
+        finally:
+            cursor.close()
+            self.disconnect_db(conn)

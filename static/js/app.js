@@ -81,7 +81,7 @@ async function fetchStudents() {
             console.log('Student data:', student);
             
             const option = document.createElement('option');
-            option.value = student.id;
+            option.value = student.roll_no;
             option.textContent = `${student.roll_no} - ${student.name} (${studentClass})`;
             studentSelect.appendChild(option);
         });
@@ -166,14 +166,19 @@ studentForm.addEventListener('submit', async (e) => {
 attendanceForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
-    const studentId = studentSelect.value;
-    if (!studentId) {
+    const studentSelect = document.getElementById('studentSelect');
+    const selectedOption = studentSelect.options[studentSelect.selectedIndex];
+    
+    if (!studentSelect.value) {
         showAlert('Please select a student', 'warning');
         return;
     }
     
+    // Extract roll number from the selected option text (format: "roll_no - name (class)")
+    const rollNo = selectedOption.textContent.split(' - ')[0];
+    
     const attendanceData = {
-        student_id: parseInt(studentId),
+        roll_no: parseInt(rollNo),
         date: document.getElementById('attendanceDate').value,
         status: document.querySelector('input[name="status"]:checked').value
     };

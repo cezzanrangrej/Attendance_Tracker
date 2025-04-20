@@ -258,14 +258,12 @@ def create_student():
         if not data:
             return jsonify({'error': 'No data provided'}), 400
             
-        required_fields = ['id', 'roll_no', 'name', 'class']
+        required_fields = ['roll_no', 'name', 'class']
         for field in required_fields:
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
 
         try:
-            student_id = int(data['id'])
-            
             # 'class' is a reserved keyword in Python, so ensure we're handling it correctly
             student_class = data.get('class')
             if not student_class or student_class.strip() == '':
@@ -279,10 +277,10 @@ def create_student():
             print(f"Created student object: {student}")
         except ValueError as e:
             print(f"ValueError: {str(e)}")
-            return jsonify({'error': 'ID and roll number must be valid integers'}), 400
+            return jsonify({'error': 'Roll number must be a valid integer'}), 400
         
         try:
-            sid = system.add_student(student, student_id)
+            sid = system.add_student(student)
             row = system.get_student(sid)
             
             # Ensure class is properly defined in the response
@@ -357,16 +355,26 @@ def delete_student(sid):
 @app.route('/api/attendance', methods=['GET'])
 def list_all_attendance():
     try:
-        print("Received GET request for /api/attendance")
         if system is None:
             raise Exception("Database system not initialized")
             
         rows = system.list_all_attendance()
-        # No need to transform rows here as we've done that in the DB layer
-        print(f"Returning attendance records: {rows}")
-        return jsonify(rows)
+        records = []
+        
+        for row in rows:
+            record = {
+                'id': row['id'],
+                'roll_no': row['roll_no'],
+                'name': row['name'],
+                'class': row['class'] if 'class' in row else 'N/A',
+                'date': str(row['date']),
+                'status': row['status']
+            }
+            records.append(record)
+            
+        return jsonify(records)
     except Exception as e:
-        print(f"Error in list_all_attendance: {str(e)}")
+        print(f"Error listing attendance: {str(e)}")
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
@@ -383,13 +391,13 @@ def mark_attendance():
         if not data:
             return jsonify({'error': 'No data provided'}), 400
             
-        required_fields = ['student_id', 'date', 'status']
+        required_fields = ['roll_no', 'date', 'status']
         for field in required_fields:
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
 
         try:
-            student_id = int(data['student_id'])
+            roll_no = int(data['roll_no'])
             at_date = datetime.strptime(data['date'], '%Y-%m-%d').date()
             status = data['status']
             
@@ -397,40 +405,37 @@ def mark_attendance():
             if status not in ['Present', 'Absent']:
                 return jsonify({'error': 'Status must be either Present or Absent'}), 400
                 
-            # Check if student exists
-            student = system.get_student(student_id)
+            # Get student by roll number
+            students = system.list_students()
+            student = None
+            for s in students:
+                if s['roll_no'] == roll_no:
+                    student = s
+                    break
+                    
             if not student:
-                return jsonify({'error': f'Student with ID {student_id} not found'}), 404
+                return jsonify({'error': f'Student with roll number {roll_no} not found'}), 404
                 
-            aid = system.mark_attendance(student_id, at_date, status)
+            aid = system.mark_attendance(student['id'], at_date, status)
             if not aid:
                 return jsonify({'error': 'Failed to mark attendance'}), 500
                 
             row = system.get_attendance(aid)
             
-            # Get student details to include class
-            student_details = system.get_student(student_id)
-            
             response_data = {
                 'id': row['id'],
                 'student_id': row['student_id'],
-                'roll_no': student_details['roll_no'],
-                'name': student_details['name'],
-                'class': student_details['class'] if student_details and 'class' in student_details else 'N/A',
+                'roll_no': student['roll_no'],
+                'name': student['name'],
+                'class': student['class'] if 'class' in student else 'N/A',
                 'date': str(row['date']),
                 'status': row['status']
             }
-            
-            print(f"Successfully marked attendance: {response_data}")
             return jsonify(response_data), 201
-            
         except ValueError as e:
-            return jsonify({'error': f'Invalid data format: {str(e)}'}), 400
-        except Exception as e:
-            return jsonify({'error': str(e)}), 400
-            
+            return jsonify({'error': 'Roll number must be a valid integer'}), 400
     except Exception as e:
-        print(f"Error in mark_attendance: {str(e)}")
+        print(f"Error marking attendance: {str(e)}")
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
@@ -449,10 +454,21 @@ def get_attendance(aid):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/attendance/student/<int:student_id>', methods=['GET'])
-def list_attendance_for_student(student_id):
+@app.route('/attendance/student/<int:roll_no>', methods=['GET'])
+def list_attendance_for_student(roll_no):
     try:
-        rows = system.list_attendance_by_student(student_id)
+        # Find student by roll number
+        students = system.list_students()
+        student = None
+        for s in students:
+            if s['roll_no'] == roll_no:
+                student = s
+                break
+                
+        if not student:
+            return jsonify({'error': f'Student with roll number {roll_no} not found'}), 404
+            
+        rows = system.list_attendance_by_student(student['id'])
         records = [{'id': r['id'], 'date': str(r['date']), 'status': r['status']} for r in rows]
         return jsonify(records)
     except Exception as e:
@@ -468,9 +484,15 @@ def update_attendance(aid):
         new_status = data.get('status')
         system.update_attendance(aid, new_status)
         row = system.get_attendance(aid)
+        
+        # Get student details
+        student = system.get_student(row['student_id'])
+        
         return jsonify({
             'id': row['id'],
-            'student_id': row['student_id'],
+            'roll_no': student['roll_no'],
+            'name': student['name'],
+            'class': student['class'] if 'class' in student else 'N/A',
             'date': str(row['date']),
             'status': row['status']
         })
